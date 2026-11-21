@@ -1,13 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../core/ai/ai_key_store.dart';
 import '../../core/data/entry_repository.dart';
 import '../../core/data/food_repository.dart';
 import '../../core/data/models.dart';
 import '../../core/data/settings_repository.dart';
 import '../../core/db/app_database.dart';
+import '../../core/insights/coach_recap.dart';
+import '../../core/insights/insight_engine.dart';
 import '../../core/theme/palette.dart';
 import '../../core/theme/typography.dart';
 import '../../core/widgets/pixel_widgets.dart';
+import '../insights/insight_card.dart';
 import 'meal_detail_sheet.dart';
 
 /// One day in the meals chart.
@@ -70,6 +76,10 @@ class _MealsHistoryScreenState extends State<MealsHistoryScreen> {
   int _goalKcal = SettingsRepository.defaultKcalGoal;
   List<MealDay> _weekDays = const [];
   Map<String, MacroTotals> _macros = const {};
+  List<Insight> _insights = const [];
+  CoachRecapData? _recap;
+  bool _aiOn = false;
+  bool _recapRunning = false;
   bool _loading = true;
 
   @override
@@ -90,6 +100,27 @@ class _MealsHistoryScreenState extends State<MealsHistoryScreen> {
     final goal = await settings.kcalGoal();
     final macros = await entries.macroTotalsForRange(startKey, todayKey);
 
+    // Insights: deterministic rules over the same week, including the
+    // water <-> food cross-domain rules.
+    final foodEntries = await entries.foodEntriesBetween(startKey, todayKey);
+    final waterEntries = await entries.waterEntriesBetween(startKey, todayKey);
+    final waterGoal = await settings.waterGoalMl();
+    final insights = InsightEngine.generate(InsightEngineInput(
+      foodEntries: foodEntries,
+      waterEntries: waterEntries,
+      goalKcal: goal,
+      goalMl: waterGoal,
+      now: now,
+    ))
+        .where(
+            (i) => i.scope == InsightScope.food || i.scope == InsightScope.both)
+        .toList(growable: false);
+
+    // Coach recap: show the cached one immediately; AI refresh happens
+    // in the background below (at most once per 7 days, key required).
+    final recapJson = await settings.lastCoachRecap();
+    final aiOn = await AiGate(FlutterSecureAiKeyStore()).isConfigured();
+
     if (!mounted) return;
     final weekDays = <MealDay>[];
     for (var i = 6; i >= 0; i--) {
@@ -109,8 +140,92 @@ class _MealsHistoryScreenState extends State<MealsHistoryScreen> {
       _weekDays = weekDays;
       _goalKcal = goal;
       _macros = macros;
+      _insights = insights;
+      _recap = recapJson == null ? null : CoachRecapData.fromJson(recapJson);
+      _aiOn = aiOn;
       _loading = false;
     });
+
+    if (aiOn && !_recapRunning) {
+      _recapRunning = true;
+      unawaited(_refreshRecap());
+    }
+  }
+
+  /// Background recap refresh; silently keeps the cached recap on any
+  /// failure (no network, bad key, AI hiccup).
+  Future<void> _refreshRecap() async {
+    try {
+      final db = await AppDatabase.instance();
+      final fresh = await CoachRecap.maybeRun(
+        db: db,
+        keyStore: FlutterSecureAiKeyStore(),
+        now: DateTime.now(),
+      );
+      if (fresh != null && mounted) {
+        setState(() => _recap = fresh);
+      }
+    } on Object {
+      // Recap is a bonus — never break the dashboard over it.
+    } finally {
+      _recapRunning = false;
+    }
+  }
+
+  /// Bottom sheet with every stored weekly recap, newest first.
+  Future<void> _openRecapHistory() async {
+    final db = await AppDatabase.instance();
+    final history = await SettingsRepository(db).coachRecapHistory();
+    final recaps = <CoachRecapData>[];
+    for (final (_, json) in history) {
+      final data = CoachRecapData.fromJson(json);
+      if (data != null) recaps.add(data);
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'past recaps',
+                textAlign: TextAlign.center,
+                style: AppTypography.pixelDisplay(14),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: recaps.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          'no past recaps yet',
+                          textAlign: TextAlign.center,
+                          style: AppTypography.cozy(
+                              13, color: Palette.cocoaSoft),
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: recaps.length,
+                        itemBuilder: (context, i) {
+                          final r = recaps[i];
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _RecapSection(recap: r),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openDay(MealDay day) async {
@@ -140,7 +255,10 @@ class _MealsHistoryScreenState extends State<MealsHistoryScreen> {
                   weekDays: _weekDays,
                   goalKcal: _goalKcal,
                   macros: _macros,
+                  insights: _insights,
+                  recap: _aiOn ? _recap : null,
                   onDayTap: _openDay,
+                  onRecapHistory: _aiOn ? _openRecapHistory : null,
                 ),
               ),
             ),
@@ -156,12 +274,23 @@ class MealsHistoryView extends StatelessWidget {
     required this.weekDays,
     required this.goalKcal,
     required this.macros,
+    this.insights = const [],
+    this.recap,
+    this.onRecapHistory,
     required this.onDayTap,
   });
 
   final List<MealDay> weekDays; // last 7, oldest -> newest
   final Map<String, MacroTotals> macros; // date -> portion-scaled totals
   final int goalKcal;
+
+  /// Food-scoped insights; empty by default so existing callers and
+  /// tests stay untouched.
+  final List<Insight> insights;
+
+  /// Cached AI coach recap (null = no card: AI off or never ran).
+  final CoachRecapData? recap;
+  final VoidCallback? onRecapHistory;
   final ValueChanged<MealDay> onDayTap;
 
   /// Average of one macro across the 7 shown days (empty days count as
@@ -280,6 +409,89 @@ class MealsHistoryView extends StatelessWidget {
             style: AppTypography.cozy(12, color: Palette.cocoaSoft),
           ),
         ),
+        const SizedBox(height: 20),
+        // 6) Coach recap (AI, cached weekly; hidden when AI is off)
+        if (recap != null) ...[
+          _RecapSection(recap: recap!, onHistory: onRecapHistory),
+          const SizedBox(height: 20),
+        ],
+        // 7) Insights section (food-scoped rules + cross-domain links)
+        InsightsSection(insights: insights, max: 3, now: DateTime.now()),
+      ],
+    );
+  }
+}
+
+/// Coach recap card: week label, tip list, optional history entry.
+class _RecapSection extends StatelessWidget {
+  const _RecapSection({required this.recap, this.onHistory});
+
+  final CoachRecapData recap;
+  final VoidCallback? onHistory;
+
+  String get _weekLabel {
+    if (recap.weekKey.isEmpty) return 'coach recap';
+    final parts = recap.weekKey.split('-');
+    final d = DateTime(
+        int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return 'coach recap · week of ${months[d.month - 1]} ${d.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.auto_awesome, size: 16, color: Palette.skyDeep),
+            const SizedBox(width: 6),
+            Text(
+              _weekLabel,
+              style: AppTypography.pixelDisplay(12, color: Palette.skyDeep),
+            ),
+            if (onHistory != null)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'past recaps',
+                icon: const Icon(
+                  Icons.history,
+                  size: 18,
+                  color: Palette.cocoaSoft,
+                ),
+                onPressed: onHistory,
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        for (final tip in recap.tips) ...[
+          PixelCard(
+            color: Palette.skySoft,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  tip.title,
+                  style:
+                      AppTypography.pixelDisplay(11, color: Palette.skyDeep),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  tip.body,
+                  style: AppTypography.cozy(12, color: Palette.cocoa),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
       ],
     );
   }

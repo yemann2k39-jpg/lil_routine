@@ -82,6 +82,17 @@ class MacroTotals {
   static MacroTotals zero() => const MacroTotals();
 }
 
+/// Portion-scaled sodium (mg) + sugar (g) sums for one day — used by
+/// insight rules and the AI coach recap only; never rendered as goals.
+class MicroTotals {
+  const MicroTotals({this.sodiumMg = 0, this.sugarG = 0});
+
+  final double sodiumMg;
+  final double sugarG;
+
+  static MicroTotals zero() => const MicroTotals();
+}
+
 /// One row of the unified daily log: either a water amount or a food item.
 class Entry {
   const Entry({

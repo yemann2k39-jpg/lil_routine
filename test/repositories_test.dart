@@ -52,6 +52,32 @@ void main() {
       expect(total, closeTo(1100, 0.01));
     });
 
+    test('microTotalsForRange sums portion-scaled sodium + sugar per day',
+        () async {
+      final repo = EntryRepository(db);
+      await repo.addFood(
+        name: 'ramen',
+        mealType: MealType.dinner,
+        kcal: 700,
+        sugar: 6,
+        sodium: 1600,
+        portion: 1.5,
+      );
+      await repo.addFood(
+        name: 'candy',
+        mealType: MealType.snack,
+        kcal: 100,
+        sugar: 20,
+        sodium: 10,
+        portion: 1,
+      );
+      final today = dateKey(DateTime.now());
+      final totals = await repo.microTotalsForRange(today, today);
+      expect(totals, contains(today));
+      expect(totals[today]!.sodiumMg, closeTo(1600 * 1.5 + 10, 0.01));
+      expect(totals[today]!.sugarG, closeTo(6 * 1.5 + 20, 0.01));
+    });
+
     test('entriesForDate returns only that day, ordered', () async {
       final repo = EntryRepository(db);
       final now = DateTime.now();

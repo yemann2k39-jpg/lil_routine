@@ -197,6 +197,27 @@ class EntryRepository {
     };
   }
 
+  /// Per-day sodium (mg) and sugar (g) totals, portion-scaled —
+  /// insight rules and the AI coach recap. Never auto-fixes data.
+  Future<Map<String, MicroTotals>> microTotalsForRange(
+      String startDate, String endDate) async {
+    final rows = await db.rawQuery(
+      'SELECT date, '
+      'SUM(sodium * portion) AS sodium, '
+      'SUM(sugar * portion) AS sugar '
+      'FROM entries '
+      'WHERE type = ? AND date BETWEEN ? AND ? GROUP BY date',
+      [EntryType.food.name, startDate, endDate],
+    );
+    return {
+      for (final r in rows)
+        r['date'] as String: MicroTotals(
+          sodiumMg: (r['sodium'] as num?)?.toDouble() ?? 0,
+          sugarG: (r['sugar'] as num?)?.toDouble() ?? 0,
+        ),
+    };
+  }
+
   /// Most recent entries of any type (used by the debug screen and recents).
   Future<List<Entry>> latest({int limit = 50}) async {
     final rows = await db.query('entries',

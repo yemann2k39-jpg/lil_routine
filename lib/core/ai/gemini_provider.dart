@@ -103,6 +103,61 @@ class AiEstimateResult {
   bool get ok => estimate != null;
 }
 
+/// One tip from the weekly coach recap.
+class WeeklyTip {
+  const WeeklyTip({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  Map<String, dynamic> toJson() => {'title': title, 'body': body};
+
+  factory WeeklyTip.fromJson(Map<String, dynamic> json) => WeeklyTip(
+        title: ((json['title'] as String?) ?? '').trim(),
+        body: ((json['body'] as String?) ?? '').trim(),
+      );
+}
+
+/// One day of aggregate numbers sent to the recap — numbers only,
+/// never food names or photos.
+class RecapDayStats {
+  const RecapDayStats({
+    required this.label,
+    required this.kcal,
+    required this.proteinG,
+    required this.carbsG,
+    required this.fatG,
+    required this.sodiumMg,
+    required this.sugarG,
+    required this.waterMl,
+  });
+
+  final String label; // e.g. 'Mon Oct 26' or 'Mon Oct 26 (today)'
+  final int kcal;
+  final int proteinG;
+  final int carbsG;
+  final int fatG;
+  final int sodiumMg;
+  final int sugarG;
+  final int waterMl;
+
+  String toPromptLine() =>
+      '$label: kcal $kcal, protein ${proteinG}g, carbs ${carbsG}g, '
+      'fat ${fatG}g, sodium ${sodiumMg}mg, sugar ${sugarG}g, '
+      'water ${waterMl}ml';
+}
+
+/// Result of a recap attempt: [ok] with tips, or a friendly [detail].
+class AiRecapResult {
+  const AiRecapResult.ok(this.tips) : detail = null;
+  const AiRecapResult.error(this.detail) : tips = null;
+
+  final List<WeeklyTip>? tips;
+  final String? detail;
+
+  bool get ok => tips != null;
+}
+
 /// Gemini via the public REST API — no SDK dependency.
 class GeminiProvider extends AiProvider {
   GeminiProvider({required this.keyStore, http.Client? client})
@@ -215,6 +270,109 @@ class GeminiProvider extends AiProvider {
       final decoded = jsonDecode(text);
       if (decoded is! Map<String, dynamic>) return null;
       return AiFoodEstimate.fromJson(decoded);
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Weekly coach recap: 3-4 personalized tips from a week of aggregate
+  /// numbers. Privacy rule: only the numbers below are sent — never
+  /// food names, photos, or raw entries.
+  Future<AiRecapResult> weeklyRecap({
+    required List<RecapDayStats> days,
+    required int kcalGoal,
+    required int waterGoalMl,
+  }) async {
+    final key = (await keyStore.readKey())?.trim() ?? '';
+    if (key.isEmpty) {
+      return const AiRecapResult.error(
+          'No API key saved yet — add one in Settings.');
+    }
+    final loggedDays = days.where((d) => d.kcal > 0 || d.waterMl > 0).length;
+    if (loggedDays < 2) {
+      return const AiRecapResult.error(
+          'Not enough logged days yet — try again after a few days.');
+    }
+
+    final prompt = 'You are the gentle nutrition coach inside a cozy '
+        'water and food tracking app for one person. Below are 7 days of '
+        'AGGREGATE numbers only (no food names exist). Goals: '
+        '$kcalGoal kcal/day, $waterGoalMl ml water/day.\n'
+        '${days.map((d) => d.toPromptLine()).join('\n')}\n'
+        'Write 3 to 4 short coaching tips about THIS week specifically. '
+        'Rules: warm, encouraging, never judgmental; mention real numbers '
+        'from the week when useful; connect water and food when the data '
+        'supports it (for example salty days vs water intake); no medical '
+        'advice; each tip max 2 sentences. Respond with ONLY a JSON '
+        'object, no markdown fences, exactly this shape:\n'
+        '{"tips": [{"title": "<max 4 words>", '
+        '"body": "<1-2 sentences>"}]}';
+
+    final uri = await _endpoint();
+    final body = jsonEncode({
+      'contents': [
+        {
+          'parts': [
+            {'text': prompt},
+          ],
+        },
+      ],
+      'generationConfig': {
+        'maxOutputTokens': 700,
+        'temperature': 0.4,
+      },
+    });
+
+    http.Response res;
+    try {
+      res = await _client.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      ).timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      return const AiRecapResult.error('Timed out — check your internet.');
+    } on Object {
+      return const AiRecapResult.error(
+          'No connection — check your internet.');
+    }
+
+    if (res.statusCode != 200) {
+      return AiRecapResult.error(_errorDetail(res));
+    }
+
+    final parsedBody = _safeJson(res);
+    final text = parsedBody == null ? '' : (_extractText(parsedBody) ?? '');
+    final tips = parseWeeklyRecapJson(text);
+    if (tips == null || tips.isEmpty) {
+      return const AiRecapResult.error(
+          'Gemini answered, but not in the expected shape — try again.');
+    }
+    return AiRecapResult.ok(tips);
+  }
+
+  /// Extracts the tips list from model text (handles ```json fences and
+  /// prose around the object). Null when the shape is wrong.
+  static List<WeeklyTip>? parseWeeklyRecapJson(String raw) {
+    var text = raw.trim();
+    final start = text.indexOf('{');
+    final end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    text = text.substring(start, end + 1);
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is! Map<String, dynamic>) return null;
+      final list = decoded['tips'];
+      if (list is! List || list.isEmpty) return null;
+      final tips = <WeeklyTip>[];
+      for (final item in list) {
+        if (item is! Map<String, dynamic>) return null;
+        final tip = WeeklyTip.fromJson(item);
+        if (tip.title.isEmpty || tip.body.isEmpty) return null;
+        tips.add(tip);
+      }
+      // Keep it a recap: 3-5 tips, drop extras defensively.
+      return tips.length > 5 ? tips.sublist(0, 5) : tips;
     } on Object {
       return null;
     }

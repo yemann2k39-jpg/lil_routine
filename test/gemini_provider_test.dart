@@ -280,4 +280,136 @@ void main() {
     expect(e.kcal, 123); // numeric strings parsed
     expect(e.portion, 1); // zero portion bumped to 1
   });
+
+  // --- Weekly coach recap (LIL-22) ------------------------------------
+
+  RecapDayStats day(String label, {int kcal = 0, int water = 0}) =>
+      RecapDayStats(
+        label: label,
+        kcal: kcal,
+        proteinG: 0,
+        carbsG: 0,
+        fatG: 0,
+        sodiumMg: 0,
+        sugarG: 0,
+        waterMl: water,
+      );
+
+  test('weeklyRecap parses a clean tips answer', () async {
+    final bodies = <String>[];
+    final provider = GeminiProvider(
+      keyStore: InMemoryAiKeyStore()..writeKey('k'),
+      client: MockClient((req) async {
+        bodies.add(req.body);
+        return http.Response(
+          jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {
+                      'text': '{"tips": ['
+                          '{"title": "salty days", '
+                          '"body": "Sodium was high; add a glass of water."},'
+                          '{"title": "steady week", '
+                          '"body": "You hit your water goal 4 times."}'
+                          ']}'
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    final result = await provider.weeklyRecap(
+      days: [
+        day('Mon Oct 26', kcal: 1500, water: 3100),
+        day('Tue Oct 27', kcal: 2400, water: 1200),
+        day('Wed Oct 28', kcal: 1800, water: 2800),
+      ],
+      kcalGoal: 2000,
+      waterGoalMl: 3000,
+    );
+
+    expect(result.ok, isTrue);
+    expect(result.tips, hasLength(2));
+    expect(result.tips!.first.title, 'salty days');
+    expect(result.tips!.last.body, contains('water goal'));
+    // Prompt carries numbers + goals, and stays name-free by design.
+    expect(bodies.join(), contains('kcal 1500'));
+    expect(bodies.join(), contains('water 1200ml'));
+    expect(bodies.join(), contains('2000 kcal/day'));
+  });
+
+  test('weeklyRecap strips markdown fences around tips JSON', () {
+    const raw = 'Sure!\n```json\n{"tips": [{"title": "t", "body": "b"}]}\n```';
+    final tips = GeminiProvider.parseWeeklyRecapJson(raw);
+    expect(tips, isNotNull);
+    expect(tips!.single.title, 't');
+  });
+
+  test('parseWeeklyRecapJson rejects wrong shapes', () {
+    expect(GeminiProvider.parseWeeklyRecapJson('no json here'), isNull);
+    expect(GeminiProvider.parseWeeklyRecapJson('{"tips": []}'), isNull);
+    expect(
+        GeminiProvider.parseWeeklyRecapJson(
+            '{"tips": [{"title": "", "body": "b"}]}'),
+        isNull);
+    expect(
+        GeminiProvider.parseWeeklyRecapJson(
+            '{"tips": [{"title": "t"}]}'),
+        isNull);
+    expect(
+        GeminiProvider.parseWeeklyRecapJson(
+            '{"tips": [{"title": "t", "body": "b"}, "nope"]}'),
+        isNull);
+  });
+
+  test('weeklyRecap refuses to run with fewer than 2 logged days',
+      () async {
+    http.Request? seen;
+    final provider = GeminiProvider(
+      keyStore: InMemoryAiKeyStore()..writeKey('k'),
+      client: MockClient((req) async {
+        seen = req;
+        return http.Response('{}', 200);
+      }),
+    );
+    final result = await provider.weeklyRecap(
+      days: [
+        day('Mon Oct 26', kcal: 1500, water: 1000),
+        day('Tue Oct 27'), // empty day
+        day('Wed Oct 28'), // empty day
+      ],
+      kcalGoal: 2000,
+      waterGoalMl: 3000,
+    );
+    expect(result.ok, isFalse);
+    expect(result.detail, contains('Not enough logged days'));
+    expect(seen, isNull);
+  });
+
+  test('weeklyRecap without key answers immediately without HTTP',
+      () async {
+    http.Request? seen;
+    final provider = GeminiProvider(
+      keyStore: InMemoryAiKeyStore(),
+      client: MockClient((req) async {
+        seen = req;
+        return http.Response('{}', 200);
+      }),
+    );
+    final result = await provider.weeklyRecap(
+      days: [day('Mon Oct 26', kcal: 1500), day('Tue Oct 27', kcal: 1500)],
+      kcalGoal: 2000,
+      waterGoalMl: 3000,
+    );
+    expect(result.ok, isFalse);
+    expect(result.detail, contains('No API key'));
+    expect(seen, isNull);
+  });
 }

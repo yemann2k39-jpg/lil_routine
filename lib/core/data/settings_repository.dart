@@ -59,4 +59,38 @@ class SettingsRepository {
 
   Future<void> setReminderMinutes(int value) =>
       set('reminder_minutes', value);
+
+  // --- AI coach recap (LIL-22) -----------------------------------------
+
+  /// Saves one week's recap: json under its week key (history), plus a
+  /// "last" pointer and timestamp used for the 7-day auto cadence.
+  Future<void> saveCoachRecap({
+    required String weekKey,
+    required String json,
+    required DateTime at,
+  }) async {
+    await set('coach_recap_week_$weekKey', json);
+    await set('coach_recap_last', json);
+    await set('coach_recap_at', at.toIso8601String());
+  }
+
+  /// ISO8601 time of the last recap, or null when none ran yet.
+  Future<String?> coachRecapAt() => _get('coach_recap_at');
+
+  /// Latest recap JSON (tips list), or null.
+  Future<String?> lastCoachRecap() => _get('coach_recap_last');
+
+  /// All stored recaps, newest week first: (weekKey, json).
+  Future<List<(String, String)>> coachRecapHistory() async {
+    final rows = await db.query('settings',
+        where: "key LIKE 'coach_recap_week_%'",
+        orderBy: 'key DESC');
+    return [
+      for (final r in rows)
+        (
+          (r['key'] as String).substring('coach_recap_week_'.length),
+          r['value'] as String,
+        ),
+    ];
+  }
 }

@@ -4,9 +4,11 @@ import '../../core/data/entry_repository.dart';
 import '../../core/data/models.dart';
 import '../../core/data/settings_repository.dart';
 import '../../core/db/app_database.dart';
+import '../../core/insights/insight_engine.dart';
 import '../../core/theme/palette.dart';
 import '../../core/theme/typography.dart';
 import '../../core/widgets/pixel_widgets.dart';
+import '../insights/insight_card.dart';
 
 /// Which chart the dashboard shows: the 7-day bar chart or the daily
 /// "today vs weekly average" hourly pattern.
@@ -123,6 +125,7 @@ class _WaterHistoryScreenState extends State<WaterHistoryScreen> {
   List<double> _hourAvg = const [];
   int _streakDays = 0;
   int _heartsLeft = 3;
+  List<Insight> _insights = const [];
   bool _loading = true;
 
   @override
@@ -169,6 +172,21 @@ class _WaterHistoryScreenState extends State<WaterHistoryScreen> {
       );
     }
 
+    // Insights: deterministic rules over the same week of entries,
+    // including the water <-> food cross-domain rules.
+    final foodEntries = await entries.foodEntriesBetween(startKey, todayKey);
+    final kcalGoal = await settings.kcalGoal();
+    final insights = InsightEngine.generate(InsightEngineInput(
+      foodEntries: foodEntries,
+      waterEntries: weekEntries,
+      goalKcal: kcalGoal,
+      goalMl: goal,
+      now: now,
+    ))
+        .where((i) =>
+            i.scope == InsightScope.water || i.scope == InsightScope.both)
+        .toList(growable: false);
+
     if (!mounted) return;
     final days = <WaterDay>[];
     for (var i = 6; i >= 0; i--) {
@@ -190,6 +208,7 @@ class _WaterHistoryScreenState extends State<WaterHistoryScreen> {
       _hourAvg = hourAvg;
       _streakDays = streak.days;
       _heartsLeft = streak.heartsLeft;
+      _insights = insights;
       _loading = false;
     });
   }
@@ -225,6 +244,7 @@ class _WaterHistoryScreenState extends State<WaterHistoryScreen> {
                   hourAvg: _hourAvg,
                   streakDays: _streakDays,
                   heartsLeft: _heartsLeft,
+                  insights: _insights,
                   onViewChange: (v) => setState(() => _view = v),
                   onDayTap: _openDay,
                 ),
@@ -260,6 +280,7 @@ class WaterHistoryView extends StatelessWidget {
     required this.hourAvg,
     required this.streakDays,
     required this.heartsLeft,
+    this.insights = const [],
     required this.onViewChange,
     required this.onDayTap,
   });
@@ -271,6 +292,10 @@ class WaterHistoryView extends StatelessWidget {
   final List<double> hourAvg; // 24 buckets, avg ml per hour over the week
   final int streakDays;
   final int heartsLeft;
+
+  /// Water-scoped insights; empty by default so existing callers and
+  /// tests stay untouched.
+  final List<Insight> insights;
   final ValueChanged<HistoryChartView> onViewChange;
   final ValueChanged<WaterDay> onDayTap;
 
@@ -397,6 +422,9 @@ class WaterHistoryView extends StatelessWidget {
             style: AppTypography.cozy(12, color: Palette.cocoaSoft),
           ),
         ),
+        const SizedBox(height: 20),
+        // 6) Insights section (water-scoped rules + cross-domain links)
+        InsightsSection(insights: insights, max: 2, now: DateTime.now()),
       ],
     );
   }
