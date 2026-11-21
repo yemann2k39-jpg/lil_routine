@@ -4,8 +4,6 @@ A cozy, local-first water / calorie / habit tracker for Android — pixel-art UI
 
 Every insight is computed **on-device** from your own log. There are no accounts, no backend, and no analytics. AI is an opt-in layer you bring a key to — the app is fully functional with zero AI configuration.
 
-[![Tests](https://github.com/yemann2k39-jpg/lil_routine/actions/workflows/test.yml/badge.svg)](https://github.com/yemann2k39-jpg/lil_routine/actions/workflows/test.yml)
-
 ## Features
 
 - **Quick water logging** — tap a cup, the ring and mascot react instantly; undo and per-drink delete for mistakes
