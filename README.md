@@ -1,4 +1,4 @@
-# LilRoutine 💧
+# LilRoutine
 
 A cozy, local-first water / calorie / habit tracker for Android — pixel-art UI, one unified SQLite log, deterministic coaching insights, and an optional bring-your-own-key Gemini AI layer.
 
@@ -55,7 +55,7 @@ Requires a recent stable Flutter SDK. The app targets Android.
 ### Optional: enable AI features
 
 1. Get a free Gemini API key from [Google AI Studio](https://aistudio.google.com/)
-2. In the app: **Settings → AI**, paste the key, tap Save and Test
+2. In the app: **Settings**, AI section — paste the key, tap Save and Test
 
 The key is stored in Android Keystore-backed secure storage — never in the database, never in the APK, never logged. Without a key every AI surface simply stays hidden.
 
@@ -70,7 +70,7 @@ The key is stored in Android Keystore-backed secure storage — never in the dat
 119 tests, all green, analyzer clean:
 
 - **Pure logic** — insight rules, mascot mood machine, streak/hearts engine, JSON parsers
-- **Repositories & migrations** — real in-memory SQLite via `sqflite_common_ffi`, including rebuilding a genuine v2 database file and asserting the v1→v3 migration path via `PRAGMA table_info`
+- **Repositories & migrations** — real in-memory SQLite via `sqflite_common_ffi`, including rebuilding a genuine v2 database file and asserting the v1 to v3 migration path via `PRAGMA table_info`
 - **AI provider** — MockClient tests for clean answers, markdown fences, bad keys, rate limits, blocked responses and non-JSON output
 - **Widgets** — full dashboards pumped from fixtures, including a `PageView` fling to reach the lazily-built macro chart
 
@@ -99,7 +99,7 @@ test/            # 119 tests mirroring the layers above
 
 ## Status & roadmap
 
-Done so far is tracked on a local ticket board (`.tickets/`, tickets LIL-1 … LIL-22). In progress / planned:
+Done so far is tracked on a local ticket board (`.tickets/`, tickets LIL-1 through LIL-22). In progress / planned:
 
 - Data export & backup (CSV + JSON snapshot)
 - Settings completion — editable goals, profile name, glass size
