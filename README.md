@@ -106,7 +106,3 @@ Done so far is tracked on a local ticket board (`.tickets/`, tickets LIL-1 … L
 - Habits UI on the existing schema
 - AI food swaps & ask-the-coach chat (reusing the estimate-parse-confirm pipeline)
 - Release prep — signed APK, debug-screen removal
-
-## License
-
-[MIT](LICENSE) — Ye Mann Kyaw
